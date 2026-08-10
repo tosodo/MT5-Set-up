@@ -4,7 +4,7 @@
 //|      Claude/MCP orchestrates and monitors; this EA decides trades.|
 //+------------------------------------------------------------------+
 #property copyright "aigentforce.io"
-#property version   "0.1"
+#property version   "1.00"
 #property strict
 
 #include <RuleGuards.mqh>

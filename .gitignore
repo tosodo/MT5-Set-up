@@ -1,0 +1,17 @@
+# Secrets — never commit
+.env
+
+# Logs and Python noise
+*.log
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Strategy Tester reports are large HTML dumps; keep the folder, not the files
+/orchestration/reports/*.html
+/orchestration/reports/*.htm
+!/orchestration/reports/.gitkeep
+
+# MT5 parameter sets
+*.set

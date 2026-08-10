@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "metatrader": {
+      "command": "metatrader-mcp-server",
+      "args": [
+        "--login", "${MT5_LOGIN}",
+        "--password", "${MT5_PASSWORD}",
+        "--server", "${MT5_SERVER}"
+      ]
+    }
+  }
+}

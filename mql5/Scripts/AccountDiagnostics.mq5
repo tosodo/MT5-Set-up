@@ -207,17 +207,21 @@ void OnStart()
        DoubleToString(valuePerPointMinLot * (double)sprMed, 2) + " " + ccy);
 
    //--- risk sizing sanity check --------------------------------------
-   // At minimum size, how big a stop can a 1% risk budget actually pay for?
-   double risk1pct = equity * 0.01;
+   // At minimum size, how big a stop can the risk budget actually pay for?
+   // Reads InpRiskPctPerTrade rather than a hardcoded 1%, so this section can
+   // never disagree with the size-cap table further down.
+   double riskBudget = equity * InpRiskPctPerTrade / 100.0;
    if(valuePerPointMinLot > 0.0)
    {
-      double affordablePoints = risk1pct / valuePerPointMinLot;
+      double affordablePoints = riskBudget / valuePerPointMinLot;
       Log("[DIAG] RISK SIZING at minimum lot");
-      Log("[DIAG]   1% of equity    : " + DoubleToString(risk1pct, 2) + " " + ccy);
+      Log("[DIAG]   " + DoubleToString(InpRiskPctPerTrade, 2) + "% of equity  : " +
+          DoubleToString(riskBudget, 2) + " " + ccy);
       Log("[DIAG]   buys a stop of  : " + DoubleToString(affordablePoints, 0) + " points = " +
           DoubleToString(affordablePoints * point, (int)digits) + " of price movement");
-      Log("[DIAG]   NOTE: 0.01 lot is the floor here. If the strategy needs a wider stop");
-      Log("[DIAG]         than that, 1% risk is not reachable on this account size.");
+      Log("[DIAG]   NOTE: " + DoubleToString(minLot, 2) + " lot is the floor here. A wider stop");
+      Log("[DIAG]         than that cannot be traded at this risk % — the position");
+      Log("[DIAG]         cannot be made smaller, so the trade is skipped instead.");
    }
 
    //--- the guards, on live numbers ----------------------------------

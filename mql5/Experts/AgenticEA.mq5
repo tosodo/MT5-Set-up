@@ -4,7 +4,7 @@
 //|      Claude/MCP orchestrates and monitors; this EA decides trades.|
 //+------------------------------------------------------------------+
 #property copyright "aigentforce.io"
-#property version   "1.20"
+#property version   "1.30"
 #property strict
 
 #include <RuleGuards.mqh>
@@ -192,6 +192,25 @@ void ReportSizingEnvelope()
          Print("AgenticEA: WARNING — a SINGLE losing trade ends the day at this risk level. ",
                "That is almost certainly too high. Lower InpRiskPctPerTrade.");
    }
+
+   // Both loss limits, as actual equity figures rather than percentages.
+   // A percentage is easy to nod at; "trading stops at 959.64" is the number
+   // you recognise on the account screen while it is happening.
+   double dayStart = RuleGuards::DayStartEquity();
+   double highWater = RuleGuards::EquityHighWater();
+
+   if(dayStart > 0.0)
+      Print("AgenticEA: daily limit ", DoubleToString(InpMaxDailyLossPct, 1), "% — trading stops for ",
+            "the day if equity falls to ",
+            DoubleToString(dayStart * (1.0 - InpMaxDailyLossPct / 100.0), 2), " ", ccy,
+            " (day started at ", DoubleToString(dayStart, 2), " ", ccy, ").");
+
+   if(highWater > 0.0)
+      Print("AgenticEA: drawdown limit ", DoubleToString(InpMaxDrawdownPct, 1), "% — trading stops ",
+            "entirely if equity falls to ",
+            DoubleToString(highWater * (1.0 - InpMaxDrawdownPct / 100.0), 2), " ", ccy,
+            ". Measured from the equity HIGH-WATER MARK (", DoubleToString(highWater, 2), " ", ccy,
+            "), not the starting balance — so this floor rises as the account grows.");
 }
 
 //+------------------------------------------------------------------+

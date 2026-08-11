@@ -56,6 +56,38 @@ execution cost — so it belongs well above normal spread, not beside it.
 **Not yet measured:** spread during London/NY hours, which should be tighter.
 Re-run the diagnostic in an active session before treating 60 as final.
 
+## Execution — confirmed by a live round trip
+
+`mql5/Scripts/SmokeTest.mq5`, 03:41:08 server. One 0.01-lot buy, opened and
+closed immediately.
+
+| | |
+|---|---|
+| Filling mode used | IOC (resolved from the broker, not assumed) |
+| Open | asked 4409.87, filled **4409.85**, 90 ms |
+| Close | filled 4409.35, 85 ms |
+| Slippage on entry | **−2.0 points — in our favour** |
+| Commission | 0.00 |
+| Swap | 0.00 |
+| Net cost of the round trip | **−£0.37** |
+| Positions left open | 0 |
+
+**IOC is confirmed working, not merely advertised.** This was the one fact that
+could not be established without sending an order.
+
+Round-trip latency ~90 ms against a terminal ping of ~80 ms, so the broker adds
+roughly 10 ms of its own. Nothing here rules out a strategy on latency grounds;
+equally, nothing here supports one that needs sub-100 ms reaction.
+
+**Realised cost exceeded quoted spread.** Quoted spread at preflight was 36
+points; entry-to-exit came to **50 points** (£0.37). The gap is price movement
+plus whatever the spread did during the ~0.2 s the position was held. This is a
+single sample and should not be treated as a measured average — but it does
+mean the quoted spread is a floor on cost, not an estimate of it. Assume worse.
+
+At 1% risk (£10), **£0.37 is ~3.7% of the risk budget per round trip**. A
+strategy has to clear that before it clears zero.
+
 ## Position sizing on £1,000
 
 | | |

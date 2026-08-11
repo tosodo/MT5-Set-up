@@ -127,17 +127,32 @@ a stop returns zero.
 
 ### What the cap means on £1,000 specifically
 
-Because 0.01 lot is the floor, 1% risk (£10) covers a stop of about **1,350
-points ($13.50)**. Ask for a wider stop and the cap correctly returns `0.00`:
-the position cannot be made smaller, so the trade is skipped rather than
-silently over-risked.
+Because 0.01 lot is the floor, the risk budget converts directly into a maximum
+tradable stop width:
 
-That is the right behaviour and an uncomfortable fact at the same time. Most
-realistic gold stops are wider than $13.50, so **on this account at 1% risk the
-EA will decline most trades**. The options are a higher risk % (a decision, not
-a workaround), a smaller-contract instrument, or more capital. Nothing here is
-a code problem — it is what £1,000 buys on gold, now made visible up front
-instead of discovered after a loss.
+| Risk per trade | Budget | Widest stop at 0.01 lot | Losses to hit the 4% daily limit |
+|---|---|---|---|
+| 1% | £10 | ~1,350 pts ($13.50) | 4 |
+| **2% (current)** | **£20** | **~2,700 pts ($27)** | **2** |
+| 3% | £30 | ~4,050 pts ($40) | 1 |
+
+Ask for a stop wider than the budget covers and the cap correctly returns
+`0.00`: the position cannot be made smaller, so the trade is skipped rather
+than silently over-risked.
+
+**Set to 2% on 11 Aug 2026.** At 1% the cap refused almost every realistic gold
+trade — $13.50 is roughly one hour's range. 2% doubles the tradable stop width
+and permits genuinely larger lots on tight stops (0.05 at a $5 stop, versus
+0.02 at 1%).
+
+**The ceiling on this number is the daily-loss limit, not appetite.** At 3% a
+single full-stop loss ends the trading day, which makes the strategy hostage to
+one trade. 2% leaves room for two. `ReportSizingEnvelope()` prints this ratio
+to the journal at startup and warns when it degrades to one.
+
+None of this is a code problem — it is what £1,000 buys on gold, now visible up
+front rather than discovered after a loss. More capital or a smaller-contract
+instrument are the only routes to both wide stops and low risk %.
 
 ## Remaining open items
 

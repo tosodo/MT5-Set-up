@@ -22,7 +22,7 @@
 input double InpMaxDailyLossPct = 4.0;    // same defaults as AgenticEA, so the
 input double InpMaxDrawdownPct  = 8.0;    // guard verdicts below match what the
 input double InpMaxSpreadPoints = 60;     // EA would decide on this same tick
-input double InpRiskPctPerTrade = 1.0;    // (kept in step with AgenticEA — if you
+input double InpRiskPctPerTrade = 2.0;    // (kept in step with AgenticEA — if you
 input int    InpSpreadSamples   = 60;     // spread samples to collect
 input int    InpSampleGapMs     = 250;    // gap between samples (60 x 250ms = 15s)
 input string InpOutFile         = "AgenticEA_diagnostics.txt";

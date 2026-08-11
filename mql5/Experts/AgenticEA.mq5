@@ -15,7 +15,16 @@ input int    InpEntryOffsetMs     = 150;    // entry-time-offset concept, from l
 input double InpATRMultiplier     = 2.0;    // ATR trailing stop multiplier
 input double InpMaxSpreadPoints   = 60;     // spread-limit gate — see note below
 input int    InpATRPeriod         = 14;     // ATR period for the trailing stop
-input double InpRiskPctPerTrade   = 1.0;    // max % of equity risked on one trade
+input double InpRiskPctPerTrade   = 2.0;    // max % of equity risked on one trade
+
+// NOTE ON InpRiskPctPerTrade: raised 1.0 -> 2.0 deliberately, not casually.
+// On a 1,000 account with a 0.01 lot floor, 1% (10) covered only a ~1,350-point
+// stop, so the size cap correctly refused almost every realistic gold trade.
+// 2% roughly doubles the tradable stop width AND allows a genuinely larger lot
+// on tight stops. The ceiling on this number is InpMaxDailyLossPct, not comfort:
+// at 2% per trade against a 4% daily limit, TWO losses end the trading day. Go
+// much above 2% and a single loss does. See ReportSizingEnvelope() below, which
+// warns in the journal when this ratio gets dangerous.
 
 // NOTE ON InpMaxSpreadPoints: this is per-instrument, not a universal number.
 // It was 30 as a placeholder, which measurement showed was unusable: on
@@ -144,6 +153,21 @@ void ReportSizingEnvelope()
    if(widestStop < (double)g_stopsLevel)
       Print("AgenticEA: WARNING — that is narrower than the broker's own ", g_stopsLevel,
             "-point minimum stop. No trade can satisfy both. Lower the risk %, or fund more.");
+
+   // How many losing trades in a row before the daily gate shuts the day down?
+   // This is the number that decides whether the risk % is survivable, and it
+   // is the one nobody works out by hand. So the EA works it out and says it.
+   if(InpRiskPctPerTrade > 0.0)
+   {
+      int lossesToDailyStop = (int)MathFloor(InpMaxDailyLossPct / InpRiskPctPerTrade);
+      Print("AgenticEA: at ", DoubleToString(InpRiskPctPerTrade, 2), "% per trade, ",
+            lossesToDailyStop, " consecutive full-stop losses reach the ",
+            DoubleToString(InpMaxDailyLossPct, 1), "% daily limit and trading stops for the day.");
+
+      if(lossesToDailyStop <= 1)
+         Print("AgenticEA: WARNING — a SINGLE losing trade ends the day at this risk level. ",
+               "That is almost certainly too high. Lower InpRiskPctPerTrade.");
+   }
 }
 
 //+------------------------------------------------------------------+

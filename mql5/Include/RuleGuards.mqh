@@ -81,9 +81,19 @@ public:
    }
 
    //--- Drawdown from the equity high-water mark (trailing DD).
-   //    IMPORTANT: some firms measure STATIC drawdown from the initial balance
-   //    instead. Confirm which one applies in docs/rule-map-template.md and
-   //    switch the baseline below to s_initialBalance if the firm is static-DD.
+   //
+   //    TRAILING IS A DECISION, NOT A DEFAULT (made 11 Aug 2026). Some venues
+   //    measure STATIC drawdown from the initial balance instead. Trailing is
+   //    never looser than static — once equity has made a new high the trailing
+   //    floor sits above the static one, and before that they are identical — so
+   //    an account that respects a trailing 8% has already respected a static 8%.
+   //    Choosing trailing means a future venue can only ever let us relax this,
+   //    never force us to tighten it after the fact.
+   //
+   //    Switching to static is therefore optional, not a fix. If a venue's rules
+   //    make it worth doing, change s_equityHighWater to s_initialBalance BOTH
+   //    here and in MaxLotForStop() below — they must agree or the size cap will
+   //    be budgeting against a different floor than the guard is enforcing.
    static bool DrawdownOK(double maxDrawdownPct)
    {
       if(!s_initialised) return false;

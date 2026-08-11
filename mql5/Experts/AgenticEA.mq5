@@ -9,13 +9,37 @@
 
 #include <RuleGuards.mqh>
 
-input double InpMaxDailyLossPct   = 4.0;    // fill from rule-map-template.md
-input double InpMaxDrawdownPct    = 8.0;    // fill from rule-map-template.md
+input double InpMaxDailyLossPct   = 4.0;    // hard stop for the day  — see NOTE below
+input double InpMaxDrawdownPct    = 8.0;    // hard stop, full account — see NOTE below
 input int    InpEntryOffsetMs     = 150;    // entry-time-offset concept, from lessons log
 input double InpATRMultiplier     = 2.0;    // ATR trailing stop multiplier
 input double InpMaxSpreadPoints   = 60;     // spread-limit gate — see note below
 input int    InpATRPeriod         = 14;     // ATR period for the trailing stop
 input double InpRiskPctPerTrade   = 2.0;    // max % of equity risked on one trade
+
+// NOTE ON THE TWO LOSS LIMITS: set deliberately on 11 Aug 2026. They were
+// placeholders before; these values are now a decision, not a leftover.
+//
+// They are set to the TIGHT END of what a funded/evaluation account is likely to
+// impose (industry norm clusters at 4-5% daily and 8-10% overall). That direction
+// is deliberate: a system that runs comfortably inside 4%/8% already satisfies a
+// venue that allows 5%/10%, so choosing a venue later can only ever LOOSEN these,
+// never force a tightening. Tightening after the fact is the expensive discovery.
+//
+// Also deliberate: the drawdown baseline stays TRAILING (from the equity high-water
+// mark) rather than STATIC (from the starting balance) — see DrawdownOK(). Trailing
+// is never looser than static, so the same reasoning applies: honouring a trailing
+// 8% automatically honours a static 8%.
+//
+// WHAT ACTUALLY ENFORCES THESE. DailyLossOK/DrawdownOK are reactive — they read
+// equity that has already moved, so alone they would only ever block the NEXT
+// trade. What makes the limits hold is MaxLotForStop(): it refuses to size any
+// trade at all if something is open without a stop loss, and it sizes every trade
+// so that the total loss-to-stops across ALL open positions stays inside the room
+// left to both limits. Every position stopped + total risk bounded in advance =
+// open positions cannot collectively breach the limits. That is the guarantee.
+// It rests on stops actually filling near their price, so it can still be beaten
+// by a gap or severe slippage. Nothing in software fixes that; only smaller size.
 
 // NOTE ON InpRiskPctPerTrade: raised 1.0 -> 2.0 deliberately, not casually.
 // On a 1,000 account with a 0.01 lot floor, 1% (10) covered only a ~1,350-point

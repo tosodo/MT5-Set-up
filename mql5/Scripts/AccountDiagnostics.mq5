@@ -13,7 +13,7 @@
 //|  of it every time.                                                |
 //+------------------------------------------------------------------+
 #property copyright "aigentforce.io"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 #property script_show_inputs
 
@@ -21,10 +21,13 @@
 
 input double InpMaxDailyLossPct = 4.0;    // same defaults as AgenticEA, so the
 input double InpMaxDrawdownPct  = 8.0;    // guard verdicts below match what the
-input double InpMaxSpreadPoints = 30;     // EA would decide on this same tick
+input double InpMaxSpreadPoints = 60;     // EA would decide on this same tick
+input double InpRiskPctPerTrade = 1.0;    // (kept in step with AgenticEA — if you
 input int    InpSpreadSamples   = 60;     // spread samples to collect
 input int    InpSampleGapMs     = 250;    // gap between samples (60 x 250ms = 15s)
 input string InpOutFile         = "AgenticEA_diagnostics.txt";
+                                          // change one, change the other, or this
+                                          // report stops describing the live EA)
 
 string g_report = "";
 
@@ -232,6 +235,60 @@ void OnStart()
    Log("[DIAG]   DrawdownOK(" + DoubleToString(InpMaxDrawdownPct, 1) + "%)  : " + YesNo(ddOK));
    Log("[DIAG]   SpreadOK(" + DoubleToString(InpMaxSpreadPoints, 0) + "pts)  : " + YesNo(sprdOK));
    Log("[DIAG]   >> Would the EA be clear to trade this tick? " + YesNo(dailyOK && ddOK && sprdOK));
+
+   //--- the position-size cap, exercised on live numbers ---------------
+   // This is the preventive guard, so a table beats a yes/no: it shows the
+   // whole envelope, including where the account runs out of granularity.
+   Log("[DIAG] POSITION-SIZE CAP  (risk " + DoubleToString(InpRiskPctPerTrade, 2) +
+       "% per trade, inside " + DoubleToString(InpMaxDailyLossPct, 1) + "% daily / " +
+       DoubleToString(InpMaxDrawdownPct, 1) + "% drawdown)");
+
+   double openRisk = RuleGuards::OpenRiskFromHere();
+   if(openRisk < 0.0)
+      Log("[DIAG]   Open positions   : SOMETHING IS OPEN WITHOUT A STOP -> cap returns 0 (correct)");
+   else
+      Log("[DIAG]   Already at risk  : " + DoubleToString(openRisk, 2) + " " + ccy +
+          " across " + (string)PositionsTotal() + " open position(s)");
+
+   int    stops[]   = {100, 200, 500, 1000, 1500, 2000, 5000};
+   double prevLot   = -1.0;
+   bool   monotonic = true;
+   Log("[DIAG]   stop(pts) | max lot | money at risk if stopped");
+   for(int i = 0; i < ArraySize(stops); i++)
+   {
+      double sPts = (double)stops[i];
+      double lot  = RuleGuards::MaxLotForStop(sym, sPts, InpRiskPctPerTrade,
+                                              InpMaxDailyLossPct, InpMaxDrawdownPct);
+      double atRisk = (valuePerPointMinLot > 0.0 && minLot > 0.0)
+                      ? lot / minLot * valuePerPointMinLot * sPts : 0.0;
+
+      Log("[DIAG]   " + StringFormat("%9d | %7s | %s", stops[i],
+             DoubleToString(lot, 2),
+             (lot > 0.0 ? DoubleToString(atRisk, 2) + " " + ccy
+                        : "-- too wide, trade would be skipped")));
+
+      // A wider stop must never permit a larger position.
+      if(prevLot >= 0.0 && lot > prevLot + 1e-9) monotonic = false;
+      prevLot = lot;
+   }
+   Log("[DIAG]   Wider stop never allows a bigger position? " + YesNo(monotonic));
+
+   // The cap must reject a size above itself, and reject an absent stop.
+   double capAt1000 = RuleGuards::MaxLotForStop(sym, 1000, InpRiskPctPerTrade,
+                                                InpMaxDailyLossPct, InpMaxDrawdownPct);
+   bool rejectsOversize = !RuleGuards::SizeOK(sym, capAt1000 + minLot, 1000,
+                                InpRiskPctPerTrade, InpMaxDailyLossPct, InpMaxDrawdownPct);
+   bool acceptsAtCap    = (capAt1000 <= 0.0) ? true
+                        : RuleGuards::SizeOK(sym, capAt1000, 1000,
+                                InpRiskPctPerTrade, InpMaxDailyLossPct, InpMaxDrawdownPct);
+   bool rejectsNoStop   = (RuleGuards::MaxLotForStop(sym, 0, InpRiskPctPerTrade,
+                                InpMaxDailyLossPct, InpMaxDrawdownPct) == 0.0);
+
+   Log("[DIAG]   Rejects one step above the cap? " + YesNo(rejectsOversize));
+   Log("[DIAG]   Accepts exactly the cap?        " + YesNo(acceptsAtCap));
+   Log("[DIAG]   Refuses to size with no stop?   " + YesNo(rejectsNoStop));
+   Log("[DIAG]   >> Size cap behaving correctly? " +
+       YesNo(monotonic && rejectsOversize && acceptsAtCap && rejectsNoStop));
 
    Log("[DIAG] ===== END - no orders were placed =====");
 

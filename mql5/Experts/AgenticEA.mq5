@@ -4,7 +4,7 @@
 //|      Claude/MCP orchestrates and monitors; this EA decides trades.|
 //+------------------------------------------------------------------+
 #property copyright "aigentforce.io"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 #include <RuleGuards.mqh>
@@ -15,6 +15,7 @@ input int    InpEntryOffsetMs     = 150;    // entry-time-offset concept, from l
 input double InpATRMultiplier     = 2.0;    // ATR trailing stop multiplier
 input double InpMaxSpreadPoints   = 60;     // spread-limit gate — see note below
 input int    InpATRPeriod         = 14;     // ATR period for the trailing stop
+input double InpRiskPctPerTrade   = 1.0;    // max % of equity risked on one trade
 
 // NOTE ON InpMaxSpreadPoints: this is per-instrument, not a universal number.
 // It was 30 as a placeholder, which measurement showed was unusable: on
@@ -110,6 +111,42 @@ bool ValidateSymbol(string sym)
 }
 
 //+------------------------------------------------------------------+
+//| Log the sizing envelope: the money at stake, and the range of     |
+//| stop distances this account can actually trade. Both ends matter. |
+//| Too tight a stop and the minimum lot risks more than allowed; too |
+//| wide and the position cannot be made small enough to fit.         |
+//+------------------------------------------------------------------+
+void ReportSizingEnvelope()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double budget = equity * InpRiskPctPerTrade / 100.0;
+   string ccy    = AccountInfoString(ACCOUNT_CURRENCY);
+
+   Print("AgenticEA: risking at most ", DoubleToString(InpRiskPctPerTrade, 2), "% of ",
+         DoubleToString(equity, 2), " ", ccy, " = ", DoubleToString(budget, 2), " ", ccy,
+         " per trade.");
+
+   double point     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(point <= 0.0 || tickSize <= 0.0 || tickValue <= 0.0 || g_minLot <= 0.0)
+      return;
+
+   // Loss of one point at the smallest position the broker will accept.
+   double perPointMinLot = g_minLot * point / tickSize * tickValue;
+   if(perPointMinLot <= 0.0) return;
+
+   double widestStop = budget / perPointMinLot;
+   Print("AgenticEA: at the minimum ", DoubleToString(g_minLot, 2), " lot that budget covers a stop of ",
+         DoubleToString(widestStop, 0), " points. Wider than that and the trade is skipped —",
+         " the position cannot be made any smaller.");
+
+   if(widestStop < (double)g_stopsLevel)
+      Print("AgenticEA: WARNING — that is narrower than the broker's own ", g_stopsLevel,
+            "-point minimum stop. No trade can satisfy both. Lower the risk %, or fund more.");
+}
+
+//+------------------------------------------------------------------+
 int OnInit()
 {
    if(!ValidateSymbol(_Symbol))
@@ -125,6 +162,10 @@ int OnInit()
    // Captures the daily/high-water baselines the risk guards measure against.
    // Until this runs, every guard blocks trading by design.
    RuleGuards::Init();
+
+   // Print the sizing envelope once, so the journal records what this EA was
+   // actually permitted to do — not what someone assumed it was permitted to do.
+   ReportSizingEnvelope();
 
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
       Print("AgenticEA: loaded, but Algo Trading is OFF — no order can be sent.");
@@ -152,20 +193,34 @@ void OnTick()
    // TODO: entry-time-offset — delay InpEntryOffsetMs before sending the order
    // TODO: ATR trailing stop management on open positions (uses g_atrHandle)
    // TODO: partial close at 1R -> move to breakeven -> trail remainder
+
+   // WHEN THE ORDER-SENDING CODE LANDS, it must do all three of these:
    //
-   // When the order-sending code lands, it must use g_fillingMode (resolved in
-   // OnInit from what the broker advertises) and keep stops at least
-   // g_stopsLevel points from price. Both are broker-specific and neither is
-   // safe to hardcode.
+   //   1. Decide the stop FIRST, then let the stop decide the size — never the
+   //      other way round. Size is an output, not an input.
+   //
+   //         double stopPts = ...;                       // from ATR, structure, etc.
+   //         stopPts = MathMax(stopPts, (double)g_stopsLevel);   // broker minimum
+   //
+   //         double lot = RuleGuards::MaxLotForStop(_Symbol, stopPts,
+   //                         InpRiskPctPerTrade, InpMaxDailyLossPct,
+   //                         InpMaxDrawdownPct);
+   //         if(lot <= 0.0) return;                      // 0 means DO NOT TRADE
+   //
+   //      A zero is a real answer, not an error: no room left inside the limits,
+   //      something unstopped is already open, or the broker's minimum lot is
+   //      itself too big for this account. All three mean the same thing — stand
+   //      down. Never substitute a minimum lot for a zero.
+   //
+   //   2. Re-check with RuleGuards::SizeOK(...) immediately before OrderSend.
+   //      The account can move between sizing and sending.
+   //
+   //   3. Send with g_fillingMode (resolved in OnInit from what the broker
+   //      advertises) and keep stops at least g_stopsLevel points from price.
+   //      Neither is safe to hardcode; both are broker-specific.
 
    // NOTE: this EA does NOT self-monitor inactivity — that guard lives in the
    // orchestration layer (inactivity_watchdog.py), which reads this account's
    // trade history via the MCP server. Don't duplicate that logic here.
-
-   // NOTE: there is no position-size cap here yet. At 1:500 leverage a single
-   // oversized order can breach both the daily-loss and drawdown limits between
-   // one tick and the next, and these guards are reactive — they measure equity
-   // that has already moved. A pre-trade size check belongs alongside the entry
-   // logic. See docs/broker-puprime-demo-2026-08-11.md.
 }
 //+------------------------------------------------------------------+

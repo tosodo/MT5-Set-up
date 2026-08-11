@@ -9,10 +9,26 @@
 //|                                                                   |
 //| FAIL-CLOSED: every guard returns false (= block trading) if it    |
 //| has not been initialised. A guard that silently passes is exactly |
-//| the failure mode this project already paid for once.              |
+//| the failure mode this project already paid for once. The sizing   |
+//| guard follows the same rule, returning 0.0 (= trade nothing).     |
+//|                                                                   |
+//| TWO KINDS OF GUARD, and the difference matters:                   |
+//|   REACTIVE  — DailyLossOK / DrawdownOK read equity that has       |
+//|               already moved. They stop the NEXT trade. They can   |
+//|               never stop the one that caused the breach.          |
+//|   PREVENTIVE — MaxLotForStop runs before the order exists and     |
+//|               bounds the worst case in advance. This is the only  |
+//|               one that can keep a limit rather than report it.    |
+//| Both are needed. Neither substitutes for the other.               |
 //+------------------------------------------------------------------+
 #ifndef RULEGUARDS_MQH
 #define RULEGUARDS_MQH
+
+// Never commit more than this fraction of free margin to a single position.
+// Not a risk limit — the stop loss is that. This is the separate protection
+// against a margin call closing positions for us, at a price of the broker's
+// choosing rather than ours.
+#define MARGIN_USE_LIMIT 0.50
 
 class RuleGuards
 {
@@ -85,8 +101,174 @@ public:
    //--- Spread gate: refuse to trade through a widened spread.
    static bool SpreadOK(double maxSpreadPoints)
    {
+      if(!s_initialised) return false;
       double spread = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
       return spread <= maxSpreadPoints;
+   }
+
+   //--- How much can still be lost from HERE if every open position runs to
+   //    its stop. Uses current price, not entry price, because equity already
+   //    reflects the move so far — counting from entry would double-count it.
+   //
+   //    Returns -1.0 if any position has no stop loss. That is not a number we
+   //    can work with: an unstopped position's worst case is the whole account,
+   //    so the only correct answer is to refuse to add more risk on top of it.
+   static double OpenRiskFromHere()
+   {
+      double total = 0.0;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+
+         double sl = PositionGetDouble(POSITION_SL);
+         if(sl <= 0.0) return -1.0;              // unstopped: unbounded risk
+
+         ENUM_ORDER_TYPE dir =
+            ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+            ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
+         double profit = 0.0;
+         if(!OrderCalcProfit(dir,
+                             PositionGetString(POSITION_SYMBOL),
+                             PositionGetDouble(POSITION_VOLUME),
+                             PositionGetDouble(POSITION_PRICE_CURRENT),
+                             sl, profit))
+            return -1.0;                          // cannot price it: refuse
+
+         if(profit < 0.0) total += -profit;       // stop already in profit costs nothing
+      }
+      return total;
+   }
+
+   //--- THE POSITION-SIZE CAP.
+   //
+   //    The other guards are reactive: they read equity that has already moved,
+   //    so they can only stop the NEXT trade, never the one that breached the
+   //    limit. At high leverage a single oversized order can blow through both
+   //    the daily and the drawdown limit between one tick and the next. This is
+   //    the guard that runs BEFORE the order exists, and it is the only one that
+   //    can prevent that rather than report it.
+   //
+   //    Returns the largest volume that keeps the worst case inside EVERY limit:
+   //      - the per-trade risk budget,
+   //      - the room left before today's daily-loss limit,
+   //      - the room left before the drawdown limit,
+   //      - what is already at risk in open positions,
+   //      - free margin,
+   //      - the symbol's own min/max/step.
+   //    Returns 0.0 for "do not trade" — including when the smallest lot the
+   //    broker allows would already be too big. Fail-closed: every unknown
+   //    returns 0.0 rather than a guess.
+   static double MaxLotForStop(string sym,
+                               double stopDistancePoints,
+                               double maxRiskPctPerTrade,
+                               double maxDailyLossPct,
+                               double maxDrawdownPct)
+   {
+      if(!s_initialised)            return 0.0;
+      if(stopDistancePoints <= 0.0) return 0.0;   // no stop = no size we can justify
+      if(maxRiskPctPerTrade <= 0.0) return 0.0;
+
+      RollDayIfNeeded();
+
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(equity <= 0.0) return 0.0;
+
+      //--- 1. How much money may this trade put at risk?
+      double budget = equity * maxRiskPctPerTrade / 100.0;
+
+      // Never more than the room left to the daily limit...
+      if(s_dayStartEquity > 0.0)
+      {
+         double dailyFloor = s_dayStartEquity * (1.0 - maxDailyLossPct / 100.0);
+         budget = MathMin(budget, equity - dailyFloor);
+      }
+      else return 0.0;
+
+      // ...nor to the drawdown limit. Keep this baseline in step with
+      // DrawdownOK() above: swap to s_initialBalance together, or not at all.
+      double ddBaseline = s_equityHighWater;      // <- swap with DrawdownOK()
+      if(ddBaseline > 0.0)
+      {
+         double ddFloor = ddBaseline * (1.0 - maxDrawdownPct / 100.0);
+         budget = MathMin(budget, equity - ddFloor);
+      }
+      else return 0.0;
+
+      // What open positions could still lose comes out of the same budget.
+      double openRisk = OpenRiskFromHere();
+      if(openRisk < 0.0) return 0.0;              // something unstopped is open
+      budget -= openRisk;
+
+      if(budget <= 0.0) return 0.0;               // no room left at all
+
+      //--- 2. What does one lot lose over that stop distance?
+      double point     = SymbolInfoDouble(sym, SYMBOL_POINT);
+      double tickSize  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+      double tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE_LOSS);
+      if(point <= 0.0 || tickSize <= 0.0 || tickValue <= 0.0) return 0.0;
+
+      double lossPerLot = stopDistancePoints * point / tickSize * tickValue;
+      if(lossPerLot <= 0.0) return 0.0;
+
+      double lot = budget / lossPerLot;
+
+      //--- 3. Margin is a second, independent ceiling.
+      //    Deliberately capped well under free margin: a position sized to the
+      //    last available pound of margin leaves nothing for the adverse move
+      //    that has not happened yet.
+      double marginPerLot = 0.0;
+      double price = SymbolInfoDouble(sym, SYMBOL_ASK);
+      if(!OrderCalcMargin(ORDER_TYPE_BUY, sym, 1.0, price, marginPerLot)) return 0.0;
+      if(marginPerLot > 0.0)
+      {
+         double usableMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * MARGIN_USE_LIMIT;
+         lot = MathMin(lot, usableMargin / marginPerLot);
+      }
+
+      //--- 4. Fit it to what the broker will actually accept.
+      return FloorToLotStep(sym, lot);
+   }
+
+   //--- Boolean form, for validating a size someone else calculated.
+   //    Use this immediately before OrderSend, even if MaxLotForStop produced
+   //    the number — the account can move between sizing and sending.
+   static bool SizeOK(string sym,
+                      double lot,
+                      double stopDistancePoints,
+                      double maxRiskPctPerTrade,
+                      double maxDailyLossPct,
+                      double maxDrawdownPct)
+   {
+      if(lot <= 0.0) return false;
+      double maxLot = MaxLotForStop(sym, stopDistancePoints, maxRiskPctPerTrade,
+                                    maxDailyLossPct, maxDrawdownPct);
+      return (maxLot > 0.0 && lot <= maxLot + 1e-9);
+   }
+
+   //--- Round DOWN to the broker's lot step and clamp to its min/max.
+   //    Down, never nearest: rounding up crosses the limit we just calculated.
+   //    Returns 0.0 if the result falls below the minimum tradable lot, which
+   //    means "this account cannot take this trade at an acceptable size" —
+   //    a real and correct answer, not an error.
+   static double FloorToLotStep(string sym, double lot)
+   {
+      double step   = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+      double minLot = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+      double maxLot = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+      if(step <= 0.0) return 0.0;
+
+      // Decimal places implied by the step, so 0.01 normalises to 2 places.
+      int digits = 0;
+      for(double s = step; s < 1.0 && digits < 8; s *= 10.0) digits++;
+
+      double snapped = NormalizeDouble(MathFloor(lot / step + 1e-9) * step, digits);
+
+      if(snapped > maxLot) snapped = NormalizeDouble(MathFloor(maxLot / step) * step, digits);
+      if(snapped < minLot) return 0.0;
+      return snapped;
    }
 
    //--- Read-only accessors, for logging / diagnostics.

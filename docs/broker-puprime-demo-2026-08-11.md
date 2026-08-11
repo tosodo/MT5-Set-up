@@ -107,11 +107,41 @@ This makes the account fine for **proving the plumbing** and poor for
 **judging whether a strategy works**. Do not read performance numbers off this
 account as if they were representative.
 
-## Open gap
+## Position-size cap — CLOSED
 
-There is **no position-size cap** in `RuleGuards.mqh`. The daily-loss and
-drawdown guards are reactive — they measure equity that has already moved. At
-1:500 leverage a single oversized order can breach both between consecutive
-ticks. Per the repo's own rule ("every rule gets a guard, or gets written down
-as an accepted risk"), this is recorded here as an open failure mode until a
-pre-trade size check exists.
+Previously recorded here as an open failure mode: the daily-loss and drawdown
+guards are *reactive*, so at 1:500 leverage a single oversized order could
+breach both between consecutive ticks with nothing to prevent it.
+
+`RuleGuards::MaxLotForStop()` now sizes every trade in advance, taking the
+smallest of: the per-trade risk budget, the room left to the daily limit, the
+room left to the drawdown limit, minus whatever open positions could still
+lose, and capped again at 50% of free margin. It returns `0.00` — trade
+nothing — if any of those leave no room, if anything is open without a stop
+loss, or if any input is missing. Rounding is always **down** to the lot step.
+
+Verified against this live account by `AccountDiagnostics.mq5`, which checks
+that a wider stop never permits a larger position, that a size one step above
+the cap is rejected, that the cap itself is accepted, and that sizing without
+a stop returns zero.
+
+### What the cap means on £1,000 specifically
+
+Because 0.01 lot is the floor, 1% risk (£10) covers a stop of about **1,350
+points ($13.50)**. Ask for a wider stop and the cap correctly returns `0.00`:
+the position cannot be made smaller, so the trade is skipped rather than
+silently over-risked.
+
+That is the right behaviour and an uncomfortable fact at the same time. Most
+realistic gold stops are wider than $13.50, so **on this account at 1% risk the
+EA will decline most trades**. The options are a higher risk % (a decision, not
+a workaround), a smaller-contract instrument, or more capital. Nothing here is
+a code problem — it is what £1,000 buys on gold, now made visible up front
+instead of discovered after a loss.
+
+## Remaining open items
+
+- Spread was measured overnight only. Re-run the diagnostic during London/NY
+  hours before treating the 60-point gate as final.
+- Realised cost is one sample. Worth re-measuring before any cost assumption
+  goes into a strategy.

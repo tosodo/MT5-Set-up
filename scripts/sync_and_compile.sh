@@ -31,19 +31,37 @@ for p in "$MT5" "$COMPILE"; do
 done
 
 # --- sync ------------------------------------------------------------------
-mkdir -p "$MT5/MQL5/Experts/$EA_NAME"
-cp "$REPO/mql5/Experts/$EA_NAME.mq5" "$MT5/MQL5/Experts/$EA_NAME/$EA_NAME.mq5"
+mkdir -p "$MT5/MQL5/Experts/$EA_NAME" "$MT5/MQL5/Scripts/$EA_NAME"
+cp "$REPO/mql5/Experts/$EA_NAME.mq5"   "$MT5/MQL5/Experts/$EA_NAME/$EA_NAME.mq5"
 cp "$REPO/mql5/Include/RuleGuards.mqh" "$MT5/MQL5/Include/RuleGuards.mqh"
-echo "synced: Experts/$EA_NAME/$EA_NAME.mq5 + Include/RuleGuards.mqh"
+cp "$REPO"/mql5/Scripts/*.mq5          "$MT5/MQL5/Scripts/$EA_NAME/"
+echo "synced: Experts/$EA_NAME + Scripts/$EA_NAME + Include/RuleGuards.mqh"
 
 # --- compile ---------------------------------------------------------------
-out="$("$COMPILE" "$PREFIX" "MQL5/Experts/$EA_NAME/$EA_NAME.mq5" 2>&1)"
-result="$(echo "$out" | grep -E "^Result:" | tail -1)"
+# Every .mq5 must build clean, not just the EA — a diagnostic script that no
+# longer compiles is a diagnostic you silently stop having.
+targets=( "MQL5/Experts/$EA_NAME/$EA_NAME.mq5" )
+for f in "$REPO"/mql5/Scripts/*.mq5; do
+  targets+=( "MQL5/Scripts/$EA_NAME/$(basename "$f")" )
+done
 
-echo "$out" | grep -Ei "error|warning" | grep -v "generating code" | grep -v "^Result:" || true
-echo "${result:-Result: (no result line — compile may not have run)}"
+failed=0
+for t in "${targets[@]}"; do
+  out="$("$COMPILE" "$PREFIX" "$t" 2>&1)"
+  result="$(echo "$out" | grep -E "^Result:" | tail -1)"
 
-case "$result" in
-  *"0 errors, 0 warnings"*) echo "OK — clean build."; exit 0 ;;
-  *)                        echo "NOT CLEAN — fix the above before deploying."; exit 1 ;;
-esac
+  echo "$out" | grep -Ei "error|warning" | grep -v "generating code" | grep -v "^Result:" || true
+  printf '%-46s %s\n' "$(basename "$t")" "${result:-Result: (no result line — compile may not have run)}"
+
+  case "$result" in
+    *"0 errors, 0 warnings"*) ;;
+    *)                        failed=1 ;;
+  esac
+done
+
+if [ "$failed" -eq 0 ]; then
+  echo "OK — clean build."
+  exit 0
+fi
+echo "NOT CLEAN — fix the above before deploying."
+exit 1
